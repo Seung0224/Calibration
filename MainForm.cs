@@ -1,20 +1,26 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
-using OpenCvSharp; // NuGet: OpenCvSharp4 필수
-using OpenCvSharp.Extensions; // NuGet: OpenCvSharp4.Extensions 필수
+using System.Collections.Generic;
+using OpenCvSharp; // NuGet: OpenCvSharp4.Windows 필수
+using OpenCvSharp.Extensions;
 
 namespace Calibration
 {
     public partial class MainForm : Form
     {
-        // OpenCV 샘플 데이터 규격 (실제 현장 데이터에 맞춰 수정 가능)
-        private const double ACTUAL_SQUARE_SIZE = 30.0; // mm
-        private const int PATTERN_W = 9; // 체커보드 내부 가로 코너 개수
-        private const int PATTERN_H = 6; // 체커보드 내부 세로 코너 개수
+        // =================================================================================
+        // [1. 설정 영역] 실제 현장의 체커보드 규격 입력
+        // =================================================================================
+        // 중요: 이 값이 틀리면 모든 계산이 틀립니다. 버니어 캘리퍼스로 잰 실제 간격을 입력하세요.
+        private const double ACTUAL_SQUARE_SIZE = 30.0; // mm (체커보드 사각형 한 칸의 실제 크기)
 
-        private Mat _sourceImage; // 현재 메모리에 로드된 이미지
+        // 체커보드 내부의 '코너 점' 개수입니다. (사각형 개수가 아님)
+        // 예: 가로 사각형이 10개면 코너는 9개입니다.
+        private const int PATTERN_W = 9;
+        private const int PATTERN_H = 6;
+
+        private Mat _sourceImage; // 메모리에 로드된 원본 이미지
 
         public MainForm()
         {
@@ -22,113 +28,125 @@ namespace Calibration
         }
 
         /// <summary>
-        /// 이미지 불러오기 버튼 클릭 이벤트
+        /// 이미지 불러오기 버튼
         /// </summary>
         private void BTN_Open_Click(object sender, EventArgs e)
         {
             using (OpenFileDialog dlg = new OpenFileDialog())
             {
-                dlg.Filter = "이미지 파일|*.jpg;*.jpeg;*.png;*.bmp";
+                dlg.Filter = "Image Files|*.jpg;*.png;*.bmp";
                 if (dlg.ShowDialog() == DialogResult.OK)
                 {
-                    // 기존 메모리 해제
                     _sourceImage?.Dispose();
 
-                    // 이미지 로드 (OpenCV 방식)
+                    // OpenCV Mat 형식으로 이미지 로드
                     _sourceImage = Cv2.ImRead(dlg.FileName);
 
-                    // Cyotek ImageBox에 표시 (Bitmap 변환 필요)
+                    // 화면(PictureBox)에 띄우기 위해 Bitmap으로 변환
                     imageBox1.Image = _sourceImage.ToBitmap();
-                    imageBox1.ZoomToFit();
 
                     lstLog.Items.Clear();
-                    lstLog.Items.Add($"[로드 완료] {dlg.SafeFileName}");
+                    lstLog.Items.Add($"[이미지 로드] {dlg.SafeFileName}");
+                    lstLog.Items.Add($"해상도: {_sourceImage.Width} x {_sourceImage.Height}");
                 }
             }
         }
 
+
         /// <summary>
-        /// 기존 방식(Step 1) 오차 검증 버튼 클릭 이벤트
+        /// [Step 1 핵심] 단순 비례식 검증 버튼
         /// </summary>
         private void BTN_Verify_Click(object sender, EventArgs e)
         {
-            if (_sourceImage == null)
-            {
-                MessageBox.Show("먼저 이미지를 불러와주세요.");
-                return;
-            }
+            if (_sourceImage == null) return;
 
-            // 1. OpenCV 코너 검출 (PatternSize는 내부 코너 개수 기준)
-            bool found = Cv2.FindChessboardCorners(_sourceImage, new OpenCvSharp.Size(PATTERN_W, PATTERN_H), out Point2f[] corners);
+            lstLog.Items.Add(">>> Step 1 검증 시작...");
+
+            // =================================================================================
+            // [2. 코너 검출] OpenCV가 체커보드의 교차점을 찾습니다.
+            // =================================================================================
+            Point2f[] corners;
+            bool found = Cv2.FindChessboardCorners(_sourceImage, new OpenCvSharp.Size(PATTERN_W, PATTERN_H), out corners);
 
             if (!found)
             {
-                lstLog.Items.Add("[실패] 코너 검출에 실패했습니다.");
+                MessageBox.Show("체커보드 코너를 찾지 못했습니다.\n조명을 확인하거나 패턴 개수 설정을 확인하세요.");
                 return;
             }
 
-            // 정밀도 향상을 위한 SubPixel 처리 (최신 머신비전 필수 과정)
+            // =================================================================================
+            // [3. 정밀 보정 (SubPixel)] - 머신비전의 필수 과정
+            // =================================================================================
+            // 그냥 찾으면 정수형(int) 픽셀만 나옵니다. (예: 100, 200)
+            // 이를 주변 픽셀의 밝기 변화를 분석해 소수점(float) 단위까지 정밀하게 다듬습니다. (예: 100.42, 200.15)
             using (Mat gray = _sourceImage.CvtColor(ColorConversionCodes.BGR2GRAY))
             {
-                Cv2.CornerSubPix(gray, corners, new OpenCvSharp.Size(11, 11), new OpenCvSharp.Size(-1, -1),
-                    new TermCriteria(CriteriaTypes.Eps | CriteriaTypes.MaxIter, 30, 0.1));
+                Cv2.CornerSubPix(gray, corners, new OpenCvSharp.Size(11, 11), new OpenCvSharp.Size(-1, -1), new TermCriteria(CriteriaTypes.Eps | CriteriaTypes.MaxIter, 30, 0.1));
             }
 
-            // 2. 기존 C# 방식(Step 1) 재현: 중앙부 두 점을 기준으로 m_CalX 계산
-            // 9x6 코너 중 정중앙 부근인 22번과 23번 인덱스 사용
-            Point2f pCenter1 = corners[22];
-            Point2f pCenter2 = corners[23];
+            // =================================================================================
+            // [4. 단순 비례식 계산] (중앙부 기준)
+            // =================================================================================
+            // 렌즈는 중앙부가 가장 왜곡이 적습니다. 
+            // 따라서 9x6 패턴의 중앙에 위치한 22번, 23번 점을 기준으로 '1픽셀당 몇 mm인지' 계산합니다.
 
-            double pixelDistBase = Math.Sqrt(Math.Pow(pCenter1.X - pCenter2.X, 2) + Math.Pow(pCenter1.Y - pCenter2.Y, 2));
-            double m_CalX = ACTUAL_SQUARE_SIZE / pixelDistBase; // mm / pixel
+            // 인덱스 계산: (Height/2) * Width + (Width/2) 얼추 중앙
+            int centerIdx1 = 22;
+            int centerIdx2 = 23;
 
-            lstLog.Items.Add($"[기준] m_CalX: {m_CalX:F6} mm/px");
-            lstLog.Items.Add("-----------------------------------------");
+            Point2f p1 = corners[centerIdx1];
+            Point2f p2 = corners[centerIdx2];
 
-            // 3. 전체 코너 간 거리 측정 및 오차 분석
+            // 픽셀 거리 계산 (피타고라스)
+            double pixelDist = Math.Sqrt(Math.Pow(p1.X - p2.X, 2) + Math.Pow(p1.Y - p2.Y, 2));
+
+            // [핵심] m_CalX: 1픽셀이 실제 몇 mm인가? (Resolution)
+            double m_CalX = ACTUAL_SQUARE_SIZE / pixelDist;
+
+            lstLog.Items.Add($"[기준] 중앙부 픽셀거리: {pixelDist:F2}px");
+            lstLog.Items.Add($"[기준] 1px 당 길이(분해능): {m_CalX:F5} mm/px");
+            lstLog.Items.Add("--------------------------------------");
+
+            // =================================================================================
+            // [5. 전체 영역 오차 검증]
+            // =================================================================================
+            // 위에서 구한 m_CalX를 가지고, 가장자리(Edge) 점들의 거리를 재봅니다.
+            // 렌즈 왜곡이 있다면, 가장자리로 갈수록 30mm가 안 나오거나 넘게 나옵니다.
+
             double maxError = 0;
             double sumError = 0;
-            int checkCount = 0;
+            int count = 0;
 
-            for (int h = 0; h < PATTERN_H; h++)
+            for (int i = 0; i < corners.Length - 1; i++)
             {
-                for (int w = 0; w < PATTERN_W - 1; w++)
-                {
-                    int idx1 = h * PATTERN_W + w;
-                    int idx2 = h * PATTERN_W + (w + 1);
+                // 같은 행에 있는 점끼리만 비교 (줄바꿈 지점 제외)
+                if ((i + 1) % PATTERN_W == 0) continue;
 
-                    // 픽셀 거리 계산
-                    double distPx = Math.Sqrt(Math.Pow(corners[idx1].X - corners[idx2].X, 2) + Math.Pow(corners[idx1].Y - corners[idx2].Y, 2));
+                double dPx = Math.Sqrt(Math.Pow(corners[i].X - corners[i + 1].X, 2) + Math.Pow(corners[i].Y - corners[i + 1].Y, 2));
 
-                    // 기존 방식(단순 배율) 적용 거리
-                    double distMm = distPx * m_CalX;
+                // 단순 비례식 적용 (픽셀거리 * 배율)
+                double dMm = dPx * m_CalX;
 
-                    // 실제 규격(30mm)과의 오차
-                    double error = Math.Abs(ACTUAL_SQUARE_SIZE - distMm);
+                // 실제 값(30mm)과 차이 계산
+                double error = Math.Abs(ACTUAL_SQUARE_SIZE - dMm);
 
-                    sumError += error;
-                    if (error > maxError) maxError = error;
-                    checkCount++;
-
-                    // 외곽 지역(첫 행과 마지막 행) 로그 출력
-                    if (h == 0 || h == PATTERN_H - 1)
-                    {
-                        lstLog.Items.Add($"R{h} C{w}-{w + 1}: {distMm:F3}mm (Err:{error:F3})");
-                    }
-                }
+                if (error > maxError) maxError = error;
+                sumError += error;
+                count++;
             }
 
-            // 4. 결과 출력 및 시각화
-            lstLog.Items.Add("-----------------------------------------");
-            lstLog.Items.Add($"평균 오차: {sumError / checkCount:F4} mm");
+            // =================================================================================
+            // [6. 결과 리포트]
+            // =================================================================================
+            lstLog.Items.Add($"평균 오차: {(sumError / count):F4} mm");
             lstLog.Items.Add($"최대 오차: {maxError:F4} mm");
 
-            // 이미지 위에 검출된 코너 그려서 갱신
-            Mat resultView = _sourceImage.Clone();
-            Cv2.DrawChessboardCorners(resultView, new OpenCvSharp.Size(PATTERN_W, PATTERN_H), corners, found);
-            imageBox1.Image = resultView.ToBitmap();
+            // 시각화: 찾은 코너를 이미지에 그려서 보여줌
+            Mat resultImg = _sourceImage.Clone();
+            Cv2.DrawChessboardCorners(resultImg, new OpenCvSharp.Size(PATTERN_W, PATTERN_H), corners, found);
+            imageBox1.Image = resultImg.ToBitmap();
 
-            MessageBox.Show($"검증이 완료되었습니다.\n최대 오차: {maxError:F4} mm", "검증 결과");
+            MessageBox.Show($"검증 완료!\n\n최대 오차: {maxError:F4} mm\n\n이 오차가 허용 범위를 넘는다면\n반드시 왜곡 보정이 필요합니다.");
         }
     }
 }
