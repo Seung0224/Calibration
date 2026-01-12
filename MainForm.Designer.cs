@@ -119,7 +119,7 @@
             this.Controls.Add(this.lstLog);
             this.Controls.Add(this.panelTop);
             this.Name = "MainForm";
-            this.Text = "머신비전 캘리브레이션 오차 검증 툴 (Step 1 & 2)";
+            this.Text = "머신비전 캘리브레이션 오차 검증 툴";
             this.panelTop.ResumeLayout(false);
             this.panelTop.PerformLayout();
             this.ResumeLayout(false);

@@ -41,13 +41,10 @@ namespace Calibration
                 }
             }
         }
-        // [기존 함수] 원본(_sourceImage) 대상
         private bool FindAndSubPixelCorners(out Point2f[] corners)
         {
             return FindAndSubPixelCorners(_sourceImage, out corners);
         }
-
-        // [신규 추가] 어떤 이미지든 넣으면 찾아주는 범용 함수 (Overloading)
         private bool FindAndSubPixelCorners(Mat targetImg, out Point2f[] corners)
         {
             bool found = Cv2.FindChessboardCorners(targetImg, new OpenCvSharp.Size(PATTERN_W, PATTERN_H), out corners);
@@ -254,8 +251,6 @@ namespace Calibration
             MessageBox.Show($"[Step 2 (회사 방식) 결과]\n최대 오차: {maxError:F4} mm\n\n확인 후 다음 단계로 넘어갑시다.");
         }
         #endregion
-
-
 
         // 설명
         // 1. 렌즈의 왜곡 계수(k1, k2...)와 내부 파라미터(focal length 등)를 추출
