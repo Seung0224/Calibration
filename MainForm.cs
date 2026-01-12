@@ -56,10 +56,10 @@ namespace Calibration
                 return false;
             }
 
-            using (Mat gray = targetImg.CvtColor(ColorConversionCodes.BGR2GRAY))
+            using (Mat gray = _sourceImage.CvtColor(ColorConversionCodes.BGR2GRAY))
             {
                 Cv2.CornerSubPix(gray, corners, new OpenCvSharp.Size(11, 11), new OpenCvSharp.Size(-1, -1),
-                    new TermCriteria(CriteriaTypes.Eps | CriteriaTypes.MaxIter, 30, 0.1));
+                    new TermCriteria(CriteriaTypes.Eps | CriteriaTypes.MaxIter, 100, 0.001));
             }
 
             // 시각화 (현재 처리 중인 이미지를 화면에 갱신)
