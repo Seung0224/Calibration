@@ -18,18 +18,20 @@
         private void InitializeComponent()
         {
             this.panelTop = new System.Windows.Forms.Panel();
+            this.btnBarrelDistortionVerify = new System.Windows.Forms.Button();
             this.btnCompanyVerify = new System.Windows.Forms.Button();
             this.lblInfo = new System.Windows.Forms.Label();
             this.btnVerify = new System.Windows.Forms.Button();
             this.btnOpen = new System.Windows.Forms.Button();
             this.lstLog = new System.Windows.Forms.ListBox();
             this.imageBox1 = new Cyotek.Windows.Forms.ImageBox();
-            this.btnBarrelDistortionVerify = new System.Windows.Forms.Button();
+            this.BTN_COMPARE = new System.Windows.Forms.Button();
             this.panelTop.SuspendLayout();
             this.SuspendLayout();
             // 
             // panelTop
             // 
+            this.panelTop.Controls.Add(this.BTN_COMPARE);
             this.panelTop.Controls.Add(this.btnBarrelDistortionVerify);
             this.panelTop.Controls.Add(this.btnCompanyVerify);
             this.panelTop.Controls.Add(this.lblInfo);
@@ -40,6 +42,16 @@
             this.panelTop.Name = "panelTop";
             this.panelTop.Size = new System.Drawing.Size(1000, 60);
             this.panelTop.TabIndex = 0;
+            // 
+            // btnBarrelDistortionVerify
+            // 
+            this.btnBarrelDistortionVerify.Location = new System.Drawing.Point(454, 12);
+            this.btnBarrelDistortionVerify.Name = "btnBarrelDistortionVerify";
+            this.btnBarrelDistortionVerify.Size = new System.Drawing.Size(140, 35);
+            this.btnBarrelDistortionVerify.TabIndex = 4;
+            this.btnBarrelDistortionVerify.Text = "왜곡 보정 오차 검증";
+            this.btnBarrelDistortionVerify.UseVisualStyleBackColor = true;
+            this.btnBarrelDistortionVerify.Click += new System.EventHandler(this.BTN_Barrel_Distrotion_Verify_Click);
             // 
             // btnCompanyVerify
             // 
@@ -100,15 +112,15 @@
             this.imageBox1.TabIndex = 2;
             this.imageBox1.Text = "이미지를 불러와주세요";
             // 
-            // btnBarrelDistortionVerify
+            // BTN_COMPARE
             // 
-            this.btnBarrelDistortionVerify.Location = new System.Drawing.Point(461, 12);
-            this.btnBarrelDistortionVerify.Name = "btnBarrelDistortionVerify";
-            this.btnBarrelDistortionVerify.Size = new System.Drawing.Size(140, 35);
-            this.btnBarrelDistortionVerify.TabIndex = 4;
-            this.btnBarrelDistortionVerify.Text = "왜곡 보정 오차 검증";
-            this.btnBarrelDistortionVerify.UseVisualStyleBackColor = true;
-            this.btnBarrelDistortionVerify.Click += new System.EventHandler(this.BTN_Barrel_Distrotion_Verify_Click);
+            this.BTN_COMPARE.Location = new System.Drawing.Point(600, 12);
+            this.BTN_COMPARE.Name = "BTN_COMPARE";
+            this.BTN_COMPARE.Size = new System.Drawing.Size(140, 35);
+            this.BTN_COMPARE.TabIndex = 5;
+            this.BTN_COMPARE.Text = "회사 DLL 비교";
+            this.BTN_COMPARE.UseVisualStyleBackColor = true;
+            this.BTN_COMPARE.Click += new System.EventHandler(this.BTN_COMPARE_Click);
             // 
             // MainForm
             // 
@@ -136,5 +148,6 @@
         private Cyotek.Windows.Forms.ImageBox imageBox1;
         private System.Windows.Forms.Button btnCompanyVerify;
         private System.Windows.Forms.Button btnBarrelDistortionVerify;
+        private System.Windows.Forms.Button BTN_COMPARE;
     }
 }

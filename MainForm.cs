@@ -152,7 +152,7 @@ namespace Calibration
             // 회사 코드는 3x3 Homography 행렬을 1차원 배열[9]로 풀어서 사용합니다.
             double[] nCalMatrix = new double[9];
 
-            if (!My_COMPANY_Calibration_Matrix(nPixelPos, nRobotPos, nPoints, ref nCalMatrix))
+            if (!BSI_Calibration_Matrix(nPixelPos, nRobotPos, nPoints, ref nCalMatrix))
             {
                 MessageBox.Show("Matrix 계산 실패!");
                 return;
@@ -161,7 +161,7 @@ namespace Calibration
             // 4. 오차 검증 (COMPANY V2R 함수 사용)
             CalculateError_Step2_COMPANY(nPixelPos, nCalMatrix);
         }
-        public bool My_COMPANY_Calibration_Matrix(double[,] nPixelPos, double[,] nRobotPos, int nCalCount, ref double[] nCalMatrix)
+        public bool BSI_Calibration_Matrix(double[,] nPixelPos, double[,] nRobotPos, int nCalCount, ref double[] nCalMatrix)
         {
             try
             {
@@ -201,7 +201,7 @@ namespace Calibration
                 return false;
             }
         }
-        public void My_COMPANY_V2R(double[] nCalMatrix, double nPixel_X, double nPixel_Y, ref double nRobot_X, ref double nRobot_Y)
+        public void BSI_V2R(double[] nCalMatrix, double nPixel_X, double nPixel_Y, ref double nRobot_X, ref double nRobot_Y)
         {
             // 디컴파일된 수식 그대로 적용
             nRobot_X = nPixel_X * nCalMatrix[0] + nPixel_Y * nCalMatrix[1] + nCalMatrix[2];
@@ -219,8 +219,8 @@ namespace Calibration
             // 이 1000배 튀기는 코드는 주석 처리해야 정확한 오차 계산이 됩니다.
             // (현장 장비에서는 m 단위를 mm로 바꾸거나 단위를 맞추기 위해 쓴 것으로 추정됨)
 
-            // nRobot_X *= 1000.0; 
-            // nRobot_Y *= 1000.0;
+            nRobot_X *= 1000.0; 
+            nRobot_Y *= 1000.0;
         }
         private void CalculateError_Step2_COMPANY(double[,] nPixelPos, double[] nCalMatrix)
         {
@@ -235,8 +235,8 @@ namespace Calibration
                 double rx2 = 0, ry2 = 0;
 
                 // COMPANY 방식 V2R 함수로 좌표 변환
-                My_COMPANY_V2R(nCalMatrix, nPixelPos[i, 0], nPixelPos[i, 1], ref rx1, ref ry1);
-                My_COMPANY_V2R(nCalMatrix, nPixelPos[i + 1, 0], nPixelPos[i + 1, 1], ref rx2, ref ry2);
+                BSI_V2R(nCalMatrix, nPixelPos[i, 0], nPixelPos[i, 1], ref rx1, ref ry1);
+                BSI_V2R(nCalMatrix, nPixelPos[i + 1, 0], nPixelPos[i + 1, 1], ref rx2, ref ry2);
 
                 // mm 좌표계에서의 거리 측정
                 double distMm = Math.Sqrt(Math.Pow(rx1 - rx2, 2) + Math.Pow(ry1 - ry2, 2));
@@ -319,7 +319,7 @@ namespace Calibration
                 }
 
                 double[] nCalMatrix = new double[9];
-                if (My_COMPANY_Calibration_Matrix(nPixelPos, nRobotPos, nPoints, ref nCalMatrix))
+                if (BSI_Calibration_Matrix(nPixelPos, nRobotPos, nPoints, ref nCalMatrix))
                 {
                     CalculateError_Step2_COMPANY(nPixelPos, nCalMatrix);
                 }
@@ -327,5 +327,95 @@ namespace Calibration
         }
 
         #endregion
+
+        private void BTN_COMPARE_Click(object sender, EventArgs e)
+        {
+            if (_sourceImage == null)
+            {
+                MessageBox.Show("먼저 이미지를 로드해주세요.");
+                return;
+            }
+
+            lstLog.Items.Add(">>> [수학적 일치도 검증] 내 V2R 수식 vs 회사 DLL 비교...");
+
+            // 1. 코너 검출
+            if (!FindAndSubPixelCorners(_sourceImage, out Point2f[] corners)) return;
+
+            // 2. 회사 DLL용 데이터 준비 (m 단위)
+            int nPoints = corners.Length;
+            double[,] nPixelPos = new double[nPoints, 2];
+            double[,] nRobotPos = new double[nPoints, 2];
+
+            for (int i = 0; i < nPoints; i++)
+            {
+                nPixelPos[i, 0] = corners[i].X;
+                nPixelPos[i, 1] = corners[i].Y;
+
+                int row = i / PATTERN_W;
+                int col = i % PATTERN_W;
+                // 회사 DLL은 m 단위를 기준으로 하므로 1000으로 나눔
+                nRobotPos[i, 0] = (col * ACTUAL_SQUARE_SIZE) / 1000.0;
+                nRobotPos[i, 1] = (row * ACTUAL_SQUARE_SIZE) / 1000.0;
+            }
+
+            // 3. 회사 DLL로 Matrix 계산
+            JAS.Calibration.Calibration jasCal = new JAS.Calibration.Calibration();
+            double[] jasMatrix = new double[9];
+            int jasResult = jasCal.Calibration_Matrix(nPixelPos, nRobotPos, nPoints, ref jasMatrix);
+
+            if (jasResult != 0)
+            {
+                MessageBox.Show("회사 DLL Matrix 계산 실패");
+                return;
+            }
+
+            // -------------------------------------------------------------
+            // [핵심 검증] 동일한 Matrix를 주입했을 때 결과 비교
+            // -------------------------------------------------------------
+            lstLog.Items.Add("--- 모든 코너 점에 대한 수학적 일치도 확인 ---");
+
+            double maxDiff = 0.0;
+            double sumDiff = 0.0;
+
+            for (int i = 0; i < nPoints; i++)
+            {
+                double testX = nPixelPos[i, 0];
+                double testY = nPixelPos[i, 1];
+
+                // A. 회사 Matrix를 '나의 V2R' 수식에 주입
+                double myRx = 0, myRy = 0;
+                BSI_V2R(jasMatrix, testX, testY, ref myRx, ref myRy);
+
+                // B. 회사 Matrix를 '회사 DLL V2R' 함수로 실행
+                double jasRx = 0, jasRy = 0;
+                jasCal.V2R(jasMatrix, testX, testY, ref jasRx, ref jasRy);
+
+                // 두 결과의 거리 차이 계산
+                double diff = Math.Sqrt(Math.Pow(myRx - jasRx, 2) + Math.Pow(myRy - jasRy, 2));
+
+                if (diff > maxDiff) maxDiff = diff;
+                sumDiff += diff;
+            }
+
+            double avgDiff = sumDiff / nPoints;
+
+            lstLog.Items.Add($"평균 수학적 차이: {avgDiff:F9} mm");
+            lstLog.Items.Add($"최대 수학적 차이: {maxDiff:F9} mm");
+
+            // -------------------------------------------------------------
+            // [최종 판정]
+            // -------------------------------------------------------------
+            // 소수점 6자리 이하의 차이는 컴퓨터 부동소수점 오차이므로 0으로 간주합니다.
+            if (maxDiff < 0.000001)
+            {
+                lstLog.Items.Add(">>> [증명 완료] 나의 V2R 수식은 회사 표준과 100% 동일합니다.");
+                MessageBox.Show($"[수학적 검증 성공]\n\n최대 차이: {maxDiff:F9} mm\n\n내 수식이 회사 DLL 로직과 완벽히 일치함이 증명되었습니다.");
+            }
+            else
+            {
+                lstLog.Items.Add(">>> [검증 실패] 수식이나 단위(1000배)를 다시 확인하세요.");
+                MessageBox.Show($"[검증 실패]\n차이가 너무 큽니다: {maxDiff:F4} mm");
+            }
+        }
     }
 }
