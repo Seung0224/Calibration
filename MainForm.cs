@@ -254,5 +254,82 @@ namespace Calibration
             MessageBox.Show($"[Step 2 (회사 방식) 결과]\n최대 오차: {maxError:F4} mm\n\n확인 후 다음 단계로 넘어갑시다.");
         }
         #endregion
+
+
+
+        // 설명
+        // 1. 렌즈의 왜곡 계수(k1, k2...)와 내부 파라미터(focal length 등)를 추출
+        // 2. 이미지를 Undistort(펴기) 처리
+        // 3. 펴진 이미지로 다시 '회사 방식(Step 2)'을 돌려서 오차 0에 도전
+        #region step3: Barrel Distrotion 보정 방식
+        // 캘리브레이션 결과를 저장할 변수 (실제로는 파일로 저장해야 함)
+        private Mat _camMatrix = new Mat();   // 카메라 내부 파라미터 (f_x, f_y, c_x, c_y)
+        private Mat _distCoeffs = new Mat();  // 왜곡 계수 (k_1, k_2, p_1, p_2...)
+        private void BTN_Barrel_Distrotion_Verify_Click(object sender, EventArgs e)
+        {
+            if (_sourceImage == null) return;
+            lstLog.Items.Add(">>> Step 3 (렌즈 왜곡 보정) 시작...");
+
+            // 1. 코너 검출 (원본 이미지) -> 함수 재사용!
+            if (!FindAndSubPixelCorners(_sourceImage, out Point2f[] corners)) return;
+
+            // 2. 3D Object Point 생성
+            List<Point3f> objectPoints = new List<Point3f>();
+            for (int i = 0; i < PATTERN_H; i++)
+            {
+                for (int j = 0; j < PATTERN_W; j++)
+                {
+                    objectPoints.Add(new Point3f((float)j * (float)ACTUAL_SQUARE_SIZE, (float)i * (float)ACTUAL_SQUARE_SIZE, 0));
+                }
+            }
+
+            // List -> Mat 변환
+            Mat objectPointsMat = InputArray.Create(objectPoints.ToArray()).GetMat().Clone();
+            Mat cornersMat = InputArray.Create(corners).GetMat().Clone();
+
+            // 3. 카메라 캘리브레이션 실행
+            Mat[] rvecs, tvecs;
+            double rms = Cv2.CalibrateCamera(new List<Mat> { objectPointsMat }, new List<Mat> { cornersMat },_sourceImage.Size(), _camMatrix, _distCoeffs, out rvecs, out tvecs);
+
+            objectPointsMat.Dispose();
+            cornersMat.Dispose();
+
+            lstLog.Items.Add($"Calibration RMS 오차: {rms:F4}");
+            lstLog.Items.Add("왜곡 계수 추출 완료.");
+
+            // 4. 이미지 펴기 (Undistort)
+            Mat undistortedImg = new Mat();
+            Cv2.Undistort(_sourceImage, undistortedImg, _camMatrix, _distCoeffs);
+
+            lstLog.Items.Add("이미지 Undistort 완료.");
+
+            // 5. 재검증 (펴진 이미지로 Step 2 재실행) -> 함수 재사용!
+            // 여기서 undistortedImg를 인자로 넘겨줍니다.
+            if (FindAndSubPixelCorners(undistortedImg, out Point2f[] newCorners))
+            {
+                int nPoints = newCorners.Length;
+                double[,] nPixelPos = new double[nPoints, 2];
+                double[,] nRobotPos = new double[nPoints, 2];
+
+                for (int i = 0; i < nPoints; i++)
+                {
+                    nPixelPos[i, 0] = newCorners[i].X;
+                    nPixelPos[i, 1] = newCorners[i].Y;
+
+                    int row = i / PATTERN_W;
+                    int col = i % PATTERN_W;
+                    nRobotPos[i, 0] = col * ACTUAL_SQUARE_SIZE;
+                    nRobotPos[i, 1] = row * ACTUAL_SQUARE_SIZE;
+                }
+
+                double[] nCalMatrix = new double[9];
+                if (My_COMPANY_Calibration_Matrix(nPixelPos, nRobotPos, nPoints, ref nCalMatrix))
+                {
+                    CalculateError_Step2_COMPANY(nPixelPos, nCalMatrix);
+                }
+            }
+        }
+
+        #endregion
     }
 }
