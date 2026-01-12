@@ -294,6 +294,7 @@ namespace Calibration
 
             // 4. 이미지 펴기 (Undistort)
             Mat undistortedImg = new Mat();
+            // _camMatrix와 _distCoeffs 값만 필요
             Cv2.Undistort(_sourceImage, undistortedImg, _camMatrix, _distCoeffs);
 
             lstLog.Items.Add("이미지 Undistort 완료.");
