@@ -2,6 +2,8 @@
 using System.Drawing;
 using System.Windows.Forms;
 using System.Collections.Generic;
+using System.Linq;
+using System.Globalization;
 using OpenCvSharp; // NuGet: OpenCvSharp4.Windows 필수
 using OpenCvSharp.Extensions;
 
@@ -56,7 +58,7 @@ namespace Calibration
                 return false;
             }
 
-            using (Mat gray = _sourceImage.CvtColor(ColorConversionCodes.BGR2GRAY))
+            using (Mat gray = targetImg.CvtColor(ColorConversionCodes.BGR2GRAY))
             {
                 Cv2.CornerSubPix(gray, corners, new OpenCvSharp.Size(11, 11), new OpenCvSharp.Size(-1, -1),
                     new TermCriteria(CriteriaTypes.Eps | CriteriaTypes.MaxIter, 100, 0.001));
@@ -98,6 +100,8 @@ namespace Calibration
             double maxError = 0, sumError = 0;
             int count = 0;
 
+            dgvDistances.Rows.Clear();
+
             for (int i = 0; i < corners.Length - 1; i++)
             {
                 if ((i + 1) % PATTERN_W == 0) continue; // 줄바꿈 건너뜀
@@ -109,10 +113,16 @@ namespace Calibration
                 if (error > maxError) maxError = error;
                 sumError += error;
                 count++;
+
+                dgvDistances.Rows.Add(
+                    i,
+                    $"({corners[i].X:F1}, {corners[i].Y:F1})",
+                    $"({corners[i + 1].X:F1}, {corners[i + 1].Y:F1})",
+                    $"{dMm:F3}mm",
+                    $"{error:F3}mm");
             }
             lstLog.Items.Add($"평균 오차: {sumError / count:F4} mm");
             lstLog.Items.Add($"최대 오차: {maxError:F4} mm");
-            MessageBox.Show($"[Step 1 결과]\n최대 오차: {maxError:F4} mm");
         }
         #endregion
 
@@ -141,11 +151,11 @@ namespace Calibration
                 nPixelPos[i, 0] = corners[i].X;
                 nPixelPos[i, 1] = corners[i].Y;
 
-                // Robot (Ideal mm)
+                // Robot (Ideal, m 단위 - BSI_V2R가 내부에서 ×1000으로 mm 복원)
                 int row = i / PATTERN_W;
                 int col = i % PATTERN_W;
-                nRobotPos[i, 0] = col * ACTUAL_SQUARE_SIZE; // X (mm)
-                nRobotPos[i, 1] = row * ACTUAL_SQUARE_SIZE; // Y (mm)
+                nRobotPos[i, 0] = (col * ACTUAL_SQUARE_SIZE) / 1000.0; // X (m)
+                nRobotPos[i, 1] = (row * ACTUAL_SQUARE_SIZE) / 1000.0; // Y (m)
             }
 
             // 3. COMPANY 방식 Matrix 계산
@@ -159,7 +169,7 @@ namespace Calibration
             }
 
             // 4. 오차 검증 (COMPANY V2R 함수 사용)
-            CalculateError_Step2_COMPANY(nPixelPos, nCalMatrix);
+            CalculateError_Step2_COMPANY(nPixelPos, nCalMatrix, dgvHomography);
         }
         public bool BSI_Calibration_Matrix(double[,] nPixelPos, double[,] nRobotPos, int nCalCount, ref double[] nCalMatrix)
         {
@@ -222,10 +232,12 @@ namespace Calibration
             nRobot_X *= 1000.0; 
             nRobot_Y *= 1000.0;
         }
-        private void CalculateError_Step2_COMPANY(double[,] nPixelPos, double[] nCalMatrix)
+        private void CalculateError_Step2_COMPANY(double[,] nPixelPos, double[] nCalMatrix, DataGridView targetGrid)
         {
             double maxError = 0, sumError = 0;
             int count = 0;
+
+            targetGrid.Rows.Clear();
 
             for (int i = 0; i < nPixelPos.GetLength(0) - 1; i++)
             {
@@ -245,62 +257,189 @@ namespace Calibration
                 if (error > maxError) maxError = error;
                 sumError += error;
                 count++;
+
+                targetGrid.Rows.Add(
+                    i,
+                    $"({nPixelPos[i, 0]:F1}, {nPixelPos[i, 1]:F1})",
+                    $"({nPixelPos[i + 1, 0]:F1}, {nPixelPos[i + 1, 1]:F1})",
+                    $"{distMm:F3}mm",
+                    $"{error:F3}mm");
             }
             lstLog.Items.Add($"평균 오차: {sumError / count:F4} mm");
             lstLog.Items.Add($"최대 오차: {maxError:F4} mm");
-            MessageBox.Show($"[Step 2 (회사 방식) 결과]\n최대 오차: {maxError:F4} mm\n\n확인 후 다음 단계로 넘어갑시다.");
         }
         #endregion
 
         // 설명
-        // 1. 렌즈의 왜곡 계수(k1, k2...)와 내부 파라미터(focal length 등)를 추출
-        // 2. 이미지를 Undistort(펴기) 처리
-        // 3. 펴진 이미지로 다시 '회사 방식(Step 2)'을 돌려서 오차 0에 도전
+        // 1. [다중 이미지 캘리브레이션] 여러 장의 체커보드 이미지로 카메라 내부 파라미터(camMatrix)와 왜곡 계수(distCoeffs)를 구해서 텍스트로 저장
+        // 2. [캘리브레이션 데이터 로드] 저장해둔 텍스트를 다시 불러와 camMatrix/distCoeffs 복원 (매번 재계산할 필요 없음)
+        // 3. [왜곡 보정 오차 검증] 캘리브레이션 데이터가 로드된 상태에서만 동작 - 테스트 이미지를 Undistort 후 Step 2를 재실행해서 오차 0에 도전
         #region step3: Barrel Distrotion 보정 방식
-        // 캘리브레이션 결과를 저장할 변수 (실제로는 파일로 저장해야 함)
         private Mat _camMatrix = new Mat();   // 카메라 내부 파라미터 (f_x, f_y, c_x, c_y)
         private Mat _distCoeffs = new Mat();  // 왜곡 계수 (k_1, k_2, p_1, p_2...)
+        private bool _isCalibrationDataLoaded = false; // 다중 이미지 캘리브레이션 또는 파일 로드가 완료됐는지
+
+        private void BTN_MultiCalibrate_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dlg = new OpenFileDialog())
+            {
+                dlg.Filter = "Image Files|*.jpg;*.png;*.bmp";
+                dlg.Multiselect = true;
+                if (dlg.ShowDialog() != DialogResult.OK) return;
+
+                lstLog.Items.Clear();
+                lstLog.Items.Add($">>> 다중 이미지 캘리브레이션 시작... ({dlg.FileNames.Length}장 선택됨)");
+
+                // 모든 이미지에서 공통으로 쓰는 이상적 3D 격자 (평면, Z=0)
+                List<Point3f> objectPoints = new List<Point3f>();
+                for (int i = 0; i < PATTERN_H; i++)
+                    for (int j = 0; j < PATTERN_W; j++)
+                        objectPoints.Add(new Point3f((float)j * (float)ACTUAL_SQUARE_SIZE, (float)i * (float)ACTUAL_SQUARE_SIZE, 0));
+
+                List<Mat> objectPointsList = new List<Mat>();
+                List<Mat> imagePointsList = new List<Mat>();
+                OpenCvSharp.Size imageSize = new OpenCvSharp.Size();
+
+                foreach (string file in dlg.FileNames)
+                {
+                    using (Mat img = Cv2.ImRead(file))
+                    {
+                        imageSize = img.Size();
+
+                        bool found = Cv2.FindChessboardCorners(img, new OpenCvSharp.Size(PATTERN_W, PATTERN_H), out Point2f[] corners);
+                        if (!found)
+                        {
+                            lstLog.Items.Add($"  [실패] {System.IO.Path.GetFileName(file)} - 코너 검출 안 됨");
+                            continue;
+                        }
+
+                        using (Mat gray = img.CvtColor(ColorConversionCodes.BGR2GRAY))
+                        {
+                            Cv2.CornerSubPix(gray, corners, new OpenCvSharp.Size(11, 11), new OpenCvSharp.Size(-1, -1),
+                                new TermCriteria(CriteriaTypes.Eps | CriteriaTypes.MaxIter, 100, 0.001));
+                        }
+
+                        objectPointsList.Add(InputArray.Create(objectPoints.ToArray()).GetMat().Clone());
+                        imagePointsList.Add(InputArray.Create(corners).GetMat().Clone());
+                        lstLog.Items.Add($"  [성공] {System.IO.Path.GetFileName(file)}");
+                    }
+                }
+
+                if (objectPointsList.Count < 3)
+                {
+                    MessageBox.Show("코너 검출에 성공한 이미지가 너무 적습니다 (최소 3장 이상 필요).");
+                    foreach (var m in objectPointsList) m.Dispose();
+                    foreach (var m in imagePointsList) m.Dispose();
+                    return;
+                }
+
+                Mat[] rvecs, tvecs;
+                double rms = Cv2.CalibrateCamera(objectPointsList, imagePointsList, imageSize, _camMatrix, _distCoeffs, out rvecs, out tvecs);
+
+                foreach (var m in objectPointsList) m.Dispose();
+                foreach (var m in imagePointsList) m.Dispose();
+
+                lstLog.Items.Add($"캘리브레이션 완료: {imagePointsList.Count}장 사용, RMS 오차 {rms:F4}");
+
+                string folder = System.IO.Path.GetDirectoryName(dlg.FileNames[0]);
+                string savePath = System.IO.Path.Combine(folder, "calibration_data.txt");
+                SaveCalibrationData(savePath, imageSize, rms);
+
+                _isCalibrationDataLoaded = true;
+                lstLog.Items.Add($"저장됨: {savePath}");
+                MessageBox.Show($"캘리브레이션 완료!\n사용된 이미지: {imagePointsList.Count}장\nRMS 오차: {rms:F4}\n저장 경로: {savePath}");
+            }
+        }
+
+        private void SaveCalibrationData(string path, OpenCvSharp.Size imageSize, double rms)
+        {
+            double[] camVals = {
+                _camMatrix.At<double>(0,0), _camMatrix.At<double>(0,1), _camMatrix.At<double>(0,2),
+                _camMatrix.At<double>(1,0), _camMatrix.At<double>(1,1), _camMatrix.At<double>(1,2),
+                _camMatrix.At<double>(2,0), _camMatrix.At<double>(2,1), _camMatrix.At<double>(2,2)
+            };
+
+            int coeffCount = (int)_distCoeffs.Total();
+            double[] distVals = new double[coeffCount];
+            for (int i = 0; i < coeffCount; i++) distVals[i] = _distCoeffs.At<double>(i);
+
+            List<string> lines = new List<string>
+            {
+                "CAMMATRIX=" + string.Join(",", camVals.Select(v => v.ToString(CultureInfo.InvariantCulture))),
+                "DISTCOEFFS=" + string.Join(",", distVals.Select(v => v.ToString(CultureInfo.InvariantCulture))),
+                $"IMAGESIZE={imageSize.Width},{imageSize.Height}",
+                "RMS=" + rms.ToString(CultureInfo.InvariantCulture)
+            };
+
+            System.IO.File.WriteAllLines(path, lines);
+        }
+
+        private void BTN_LoadCalibration_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog dlg = new OpenFileDialog())
+            {
+                dlg.Filter = "Calibration Data|*.txt";
+                if (dlg.ShowDialog() != DialogResult.OK) return;
+
+                string[] lines = System.IO.File.ReadAllLines(dlg.FileName);
+                double[] camVals = null, distVals = null;
+                string imageSizeText = "", rmsText = "";
+
+                foreach (string line in lines)
+                {
+                    if (line.StartsWith("CAMMATRIX="))
+                        camVals = line.Substring("CAMMATRIX=".Length).Split(',').Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+                    else if (line.StartsWith("DISTCOEFFS="))
+                        distVals = line.Substring("DISTCOEFFS=".Length).Split(',').Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+                    else if (line.StartsWith("IMAGESIZE="))
+                        imageSizeText = line.Substring("IMAGESIZE=".Length);
+                    else if (line.StartsWith("RMS="))
+                        rmsText = line.Substring("RMS=".Length);
+                }
+
+                if (camVals == null || camVals.Length != 9 || distVals == null)
+                {
+                    MessageBox.Show("캘리브레이션 데이터 파일 형식이 올바르지 않습니다.");
+                    return;
+                }
+
+                _camMatrix = new Mat(3, 3, MatType.CV_64F);
+                for (int r = 0; r < 3; r++)
+                    for (int c = 0; c < 3; c++)
+                        _camMatrix.Set(r, c, camVals[r * 3 + c]);
+
+                _distCoeffs = new Mat(1, distVals.Length, MatType.CV_64F);
+                for (int i = 0; i < distVals.Length; i++)
+                    _distCoeffs.Set(0, i, distVals[i]);
+
+                _isCalibrationDataLoaded = true;
+
+                lstLog.Items.Add($">>> 캘리브레이션 데이터 로드 완료: {System.IO.Path.GetFileName(dlg.FileName)}");
+                if (!string.IsNullOrEmpty(imageSizeText)) lstLog.Items.Add($"  캘리브레이션 당시 해상도: {imageSizeText}");
+                if (!string.IsNullOrEmpty(rmsText)) lstLog.Items.Add($"  캘리브레이션 RMS 오차: {rmsText}");
+
+                MessageBox.Show("캘리브레이션 데이터를 불러왔습니다.");
+            }
+        }
+
         private void BTN_Barrel_Distrotion_Verify_Click(object sender, EventArgs e)
         {
             if (_sourceImage == null) return;
-            lstLog.Items.Add(">>> Step 3 (렌즈 왜곡 보정) 시작...");
 
-            // 1. 코너 검출 (원본 이미지) -> 함수 재사용!
-            if (!FindAndSubPixelCorners(_sourceImage, out Point2f[] corners)) return;
-
-            // 2. 3D Object Point 생성
-            List<Point3f> objectPoints = new List<Point3f>();
-            for (int i = 0; i < PATTERN_H; i++)
+            if (!_isCalibrationDataLoaded)
             {
-                for (int j = 0; j < PATTERN_W; j++)
-                {
-                    objectPoints.Add(new Point3f((float)j * (float)ACTUAL_SQUARE_SIZE, (float)i * (float)ACTUAL_SQUARE_SIZE, 0));
-                }
+                MessageBox.Show("먼저 [다중 이미지 캘리브레이션]을 실행하거나 [캘리브레이션 데이터 로드]로 불러와주세요.");
+                return;
             }
 
-            // List -> Mat 변환
-            Mat objectPointsMat = InputArray.Create(objectPoints.ToArray()).GetMat().Clone();
-            Mat cornersMat = InputArray.Create(corners).GetMat().Clone();
+            lstLog.Items.Add(">>> Step 3 (렌즈 왜곡 보정) 검증 시작...");
 
-            // 3. 카메라 캘리브레이션 실행
-            Mat[] rvecs, tvecs;
-            double rms = Cv2.CalibrateCamera(new List<Mat> { objectPointsMat }, new List<Mat> { cornersMat },_sourceImage.Size(), _camMatrix, _distCoeffs, out rvecs, out tvecs);
-
-            objectPointsMat.Dispose();
-            cornersMat.Dispose();
-
-            lstLog.Items.Add($"Calibration RMS 오차: {rms:F4}");
-            lstLog.Items.Add("왜곡 계수 추출 완료.");
-
-            // 4. 이미지 펴기 (Undistort)
+            // 1. 이미지 펴기 (Undistort) - 이미 확보된 _camMatrix/_distCoeffs 사용
             Mat undistortedImg = new Mat();
-            // _camMatrix와 _distCoeffs 값만 필요
             Cv2.Undistort(_sourceImage, undistortedImg, _camMatrix, _distCoeffs);
-
             lstLog.Items.Add("이미지 Undistort 완료.");
 
-            // 5. 재검증 (펴진 이미지로 Step 2 재실행) -> 함수 재사용!
-            // 여기서 undistortedImg를 인자로 넘겨줍니다.
+            // 2. 재검증 (펴진 이미지로 Step 2 재실행) -> 함수 재사용!
             if (FindAndSubPixelCorners(undistortedImg, out Point2f[] newCorners))
             {
                 int nPoints = newCorners.Length;
@@ -314,14 +453,14 @@ namespace Calibration
 
                     int row = i / PATTERN_W;
                     int col = i % PATTERN_W;
-                    nRobotPos[i, 0] = col * ACTUAL_SQUARE_SIZE;
-                    nRobotPos[i, 1] = row * ACTUAL_SQUARE_SIZE;
+                    nRobotPos[i, 0] = (col * ACTUAL_SQUARE_SIZE) / 1000.0; // X (m)
+                    nRobotPos[i, 1] = (row * ACTUAL_SQUARE_SIZE) / 1000.0; // Y (m)
                 }
 
                 double[] nCalMatrix = new double[9];
                 if (BSI_Calibration_Matrix(nPixelPos, nRobotPos, nPoints, ref nCalMatrix))
                 {
-                    CalculateError_Step2_COMPANY(nPixelPos, nCalMatrix);
+                    CalculateError_Step2_COMPANY(nPixelPos, nCalMatrix, dgvDistortion);
                 }
             }
         }
